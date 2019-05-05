@@ -27,11 +27,10 @@ limitations under the License.
 #include "llvm/IR/Module.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 
-
 namespace xla {
 namespace gpu {
 
-// Enumeration to get target specific function information.
+// Enmeration to get target specific intrinsics.
 enum class TargetFunctionID {
   kShflDownF32 = 0,
   kShflDownI32,
@@ -42,33 +41,43 @@ enum class TargetFunctionID {
   kBlockIdy,
   kBlockIdz,
   kBarrierId,
-  kPow,
-  kErfcinv,
-  kLog,
-  kLog1p,
-  kSin,
-  kCos,
-  kExp,
-  kExpm1,
-  kSqrt,
-  kRsqrt,
-  kAtan2,
-  kFmod,
-  kRound,
 };
 
-// Emits a call to the specified target function  with the given operands.
-// Target function can either be an intrinsic or a device function.
+struct TargetFunctionCallInfo {
+  TargetFunctionCallInfo(TargetFunctionID f_id, llvm::IRBuilder<>* builder)
+      : function_id(f_id), b(builder) {}
+  TargetFunctionID function_id;
+  // Input operands
+  absl::Span<llvm::Value* const> operands;
+  // Input types accepted by the device function.
+  absl::Span<const PrimitiveType> input_types;
+  // Result type of the device function.
+  PrimitiveType output_type;
+  absl::Span<const llvm::Attribute::AttrKind> attributes;
+  absl::Span<llvm::Type* const> overloaded_types;
+  llvm::IRBuilder<>* b;
+};
+
+// Emits a call to the specified target intrinsic with the given operands.
 
 // Overloaded intrinsics (for example, "minnum") must include a type
 // in overloaded_types  for each overloaded type. Typically, overloaded
 // intrinsics have only a single overloaded type.
 llvm::Value* EmitCallToTargetFunction(
     TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
-    absl::Span<const PrimitiveType> input_types, PrimitiveType output_type,
-    absl::Span<const llvm::Attribute::AttrKind> attributes,
     absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b);
 
+// Emits a call to the specified target device function with the given operands.
+llvm::Value* EmitCallToTargetFunction(
+    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
+    absl::Span<const PrimitiveType> input_types, PrimitiveType output_type,
+    absl::Span<const llvm::Attribute::AttrKind> attributes,
+    llvm::IRBuilder<>* b);
+
+// Emits a call to either a  target device function or a target intrinsic with
+// the given operands.
+llvm::Value* EmitCallToTargetFunction(
+    struct TargetFunctionCallInfo function_info);
 }  // namespace gpu
 }  // namespace xla
 

@@ -36,7 +36,6 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_loop.h"
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_util.h"
 #include "tensorflow/compiler/xla/service/llvm_ir/loop_emitter.h"
-#include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -152,8 +151,7 @@ Status EmitTiledCompareLoop(
     llvm::IRBuilder<>* b) {
   KernelSupportLibrary ksl(b);
   llvm::Value* thread_id = gpu::EmitCallToTargetFunction(
-      gpu::TargetFunctionID::kThreadIdx, {}, {},
-      PRIMITIVE_TYPE_INVALID, {},  {},  b);
+      gpu::TargetFunctionID::kThreadIdx, {}, {}, b);
   llvm_ir::AddRangeMetadata(0, tile_size / 2,
                             llvm::cast<llvm::Instruction>(thread_id));
   thread_id = b->CreateIntCast(thread_id, tiled_keys_index.GetType(),
@@ -204,8 +202,7 @@ Status EmitTiledCompareLoop(
     });
   }
   // Wait until all reads have happened.
-  gpu::EmitCallToTargetFunction(gpu::TargetFunctionID::kBarrierId, {}, {},
-                                PRIMITIVE_TYPE_INVALID, {}, {},  b);
+  gpu::EmitCallToTargetFunction(gpu::TargetFunctionID::kBarrierId, {}, {}, b);
 
   // Now emit the bodies of the comparison loops.
   auto element_address = [&](int64 operand, llvm::Value* index) {
@@ -266,8 +263,7 @@ Status EmitTiledCompareLoop(
           /*needs_bounds_checks=*/false));
     }
     // Wait until all comparisons have happened.
-    gpu::EmitCallToTargetFunction(gpu::TargetFunctionID::kBarrierId, {}, {},
-                                  PRIMITIVE_TYPE_INVALID, {}, {},  b);
+    gpu::EmitCallToTargetFunction(gpu::TargetFunctionID::kBarrierId, {}, {}, b);
   }
 
   // Copy the operand tiles back from shared memory to the operand buffers.

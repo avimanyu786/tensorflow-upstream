@@ -3212,7 +3212,7 @@ LaunchDimensions IrEmitterUnnested::EmitKernel(
           });
 
       // Wait for all threads to reach this point using `__syncthreads` in CUDA.
-      EmitCallToTargetFunction(TargetFunctionID::kBarrierId, {}, {}, PRIMITIVE_TYPE_INVALID, {}, {}, &b_);
+      EmitCallToTargetFunction(TargetFunctionID::kBarrierId, {}, {}, &b_);
     }
 
     llvm_ir::TiledParameterInfo tiled_param_info(param_shmem_buffers, y, x);
@@ -3234,7 +3234,7 @@ LaunchDimensions IrEmitterUnnested::EmitKernel(
     // buffer for the current tile before we move on to process the next tile
     // and overwrite the shared memory buffers.
     if (block_contains_multi_tiles && !tiled_param_ids.empty()) {
-      EmitCallToTargetFunction(TargetFunctionID::kBarrierId, {}, {}, PRIMITIVE_TYPE_INVALID,  {}, {}, &b_);
+      EmitCallToTargetFunction(TargetFunctionID::kBarrierId, {}, {}, &b_);
     }
   };
 

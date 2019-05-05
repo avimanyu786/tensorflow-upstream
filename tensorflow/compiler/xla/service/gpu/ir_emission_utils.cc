@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* llCopyright 2017 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -283,35 +283,6 @@ std::pair<bool, DimensionVector> GetReductionKindAndContiguousComponents(
       false, DimensionVector{num_kept_major, num_reduced, num_kept_minor});
 }
 
-llvm::Value* EmitDeviceFunctionCall(
-    const string& callee_name, absl::Span<llvm::Value* const> operands,
-    absl::Span<const PrimitiveType> input_types, PrimitiveType output_type,
-    absl::Span<const llvm::Attribute::AttrKind> attributes,
-    llvm::IRBuilder<>* ir_builder, llvm::Module* module) {
-  std::vector<llvm::Type*> ir_input_types;
-  for (PrimitiveType input_type : input_types) {
-    ir_input_types.push_back(
-        llvm_ir::PrimitiveTypeToIrType(input_type, module));
-  }
-  llvm::FunctionType* callee_type = llvm::FunctionType::get(
-      llvm_ir::PrimitiveTypeToIrType(output_type, module),  // Return type.
-      ir_input_types,                                        // Parameter types.
-      false);  // No variadic arguments.
-
-  // Declares the callee if it is not declared already.
-  llvm::Function* callee = llvm::dyn_cast<llvm::Function>(
-      ir_builder->GetInsertBlock()->getModule()->getOrInsertFunction(
-          llvm_ir::AsStringRef(callee_name), callee_type).getCallee());
-
-
-
-  for (auto attribute : attributes) {
-    callee->addFnAttr(attribute);
-  }
-
-  return ir_builder->CreateCall(callee, llvm_ir::AsArrayRef(operands));
-}
-
 // This emits a device-side call to
 // "i32 vprintf(i8* fmt, arguments_type* arguments)" in the driver; see
 // http://docs.nvidia.com/cuda/ptx-writers-guide-to-interoperability/index.html#system-calls
@@ -348,13 +319,17 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
 
   // Special case for efficiency
   if (value->getType()->isFloatTy() && bit_width == 32) {
-    return EmitCallToTargetFunction(
-        TargetFunctionID::kShflDownF32,
-        {all_warps_mask, value, offset, builder->getInt32(kWarpSize - 1)},
-        {S32, F32, S32, S32}, F32, {},{}, 
-        builder);
+    struct TargetFunctionCallInfo target_function_call_info(
+        TargetFunctionID::kShflDownF32, builder);
+    target_function_call_info.operands = {all_warps_mask, value, offset,
+                                          builder->getInt32(kWarpSize - 1)};
+    target_function_call_info.input_types = {S32, F32, S32, S32};
+    // Result type of the device function.
+    target_function_call_info.output_type = F32;
+    target_function_call_info.attributes = {};
+    target_function_call_info.overloaded_types = {};
+    return EmitCallToTargetFunction(target_function_call_info);
   }
-
 
   // We must split values wider than 32 bits as the "shfl" instruction operates
   // on 32-bit values.
@@ -365,15 +340,18 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
           builder->getIntNTy(32 * num_segments)),
       llvm::VectorType::get(builder->getInt32Ty(), num_segments));
   for (int i = 0; i < num_segments; ++i) {
+    struct TargetFunctionCallInfo target_function_call_info(
+        TargetFunctionID::kShflDownF32, builder);
+    target_function_call_info.operands = {
+        all_warps_mask, builder->CreateExtractElement(x, i), offset,
+        builder->getInt32(kWarpSize - 1)};
+    target_function_call_info.input_types = {S32, S32, S32, S32};
+    // Result type of the device function.
+    target_function_call_info.output_type = S32;
+    target_function_call_info.attributes = {};
+    target_function_call_info.overloaded_types = {};
     x = builder->CreateInsertElement(
-        x,
-        EmitCallToTargetFunction(
-            TargetFunctionID::kShflDownI32,
-            {all_warps_mask, builder->CreateExtractElement(x, i), offset,
-             builder->getInt32(kWarpSize - 1)},
-             {S32, S32, S32, S32}, S32, {}, 
-            {}, builder),
-        i);
+        x, EmitCallToTargetFunction(target_function_call_info), i);
   }
   return builder->CreateBitCast(
       builder->CreateTrunc(
@@ -417,12 +395,10 @@ llvm::Value* IsBlock0Thread0(llvm::IRBuilder<>* b) {
   return b->CreateAnd(
       b->CreateICmpEQ(
           b->getInt32(0),
-          EmitCallToTargetFunction(TargetFunctionID::kThreadIdx, {}, {}, 
-             PRIMITIVE_TYPE_INVALID, {},  {}, b)),
+          EmitCallToTargetFunction(TargetFunctionID::kThreadIdx, {}, {}, b)),
       b->CreateICmpEQ(
           b->getInt32(0),
-          EmitCallToTargetFunction(TargetFunctionID::kThreadIdx, {}, 
-              {}, PRIMITIVE_TYPE_INVALID, {}, {}, b)));
+          EmitCallToTargetFunction(TargetFunctionID::kThreadIdx, {}, {}, b)));
 }
 
 }  // namespace gpu
