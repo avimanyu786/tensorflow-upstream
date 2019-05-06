@@ -18,6 +18,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/gpu/target_util.h"
 
 #include "absl/types/variant.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_util.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
@@ -113,17 +114,19 @@ llvm::Value* EmitAMDGPUShfl(
 
   string munged_callee = callee_name;
   StrAppend(&munged_callee, "_i32");
+  llvm::FunctionCallee shfl_call = module->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee), callee_type);
+#if 0 
   llvm::Function* callee = llvm::dyn_cast<llvm::Function>(
-      b->GetInsertBlock()
-          ->getModule()
-          ->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee),
+          module->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee),
                                 callee_type)
           .getCallee());
+#endif 
+  llvm::Function* callee = llvm::dyn_cast<llvm::Function>(shfl_call.getCallee());
   for (auto attribute : attributes) {
     callee->addFnAttr(attribute);
   }
   llvm::Value* result =
-      b->CreateCall(callee, llvm_ir::AsArrayRef(converted_operands));
+      b->CreateCall(shfl_call, llvm_ir::AsArrayRef(converted_operands));
   if (output_type == F32) {
     return (
         b->CreateBitCast(result, llvm::Type::getFloatTy(module->getContext())));
@@ -189,6 +192,9 @@ llvm::Value* EmitCallToTargetFunctionHelper(
         LOG(FATAL) << "Bad Type " << PrimitiveType_Name(output_type) << "\n";
     }
     // Declares the callee if it is not declared already.
+    llvm::FunctionCallee shfl_call = module->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee), callee_type);
+    llvm::Value* result = b->CreateCall(shfl_call, llvm_ir::AsArrayRef(operands));
+#if 0 
     llvm::Function* callee = llvm::dyn_cast<llvm::Function>(
         b->GetInsertBlock()
             ->getModule()
@@ -199,6 +205,7 @@ llvm::Value* EmitCallToTargetFunctionHelper(
       callee->addFnAttr(attribute);
     }
     llvm::Value* result = b->CreateCall(callee, llvm_ir::AsArrayRef(operands));
+#endif 
     return result;
   }
 }
