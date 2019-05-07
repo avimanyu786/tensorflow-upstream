@@ -341,7 +341,7 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
       llvm::VectorType::get(builder->getInt32Ty(), num_segments));
   for (int i = 0; i < num_segments; ++i) {
     struct TargetFunctionCallInfo target_function_call_info(
-        TargetFunctionID::kShflDownF32, builder);
+        TargetFunctionID::kShflDownI32, builder);
     target_function_call_info.operands = {
         all_warps_mask, builder->CreateExtractElement(x, i), offset,
         builder->getInt32(kWarpSize - 1)};
