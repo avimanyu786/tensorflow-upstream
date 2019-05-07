@@ -320,15 +320,13 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
   // Special case for efficiency
   if (value->getType()->isFloatTy() && bit_width == 32) {
     struct TargetFunctionCallInfo target_function_call_info(
-        TargetFunctionID::kShflDownF32, builder);
+        TargetFunctionID::kShflDownF32);
     target_function_call_info.operands = {all_warps_mask, value, offset,
                                           builder->getInt32(kWarpSize - 1)};
     target_function_call_info.input_types = {S32, F32, S32, S32};
     // Result type of the device function.
     target_function_call_info.output_type = F32;
-    target_function_call_info.attributes = {};
-    target_function_call_info.overloaded_types = {};
-    return EmitCallToTargetFunction(target_function_call_info);
+    return EmitCallToTargetFunction(target_function_call_info, builder);
   }
 
   // We must split values wider than 32 bits as the "shfl" instruction operates
@@ -341,17 +339,15 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
       llvm::VectorType::get(builder->getInt32Ty(), num_segments));
   for (int i = 0; i < num_segments; ++i) {
     struct TargetFunctionCallInfo target_function_call_info(
-        TargetFunctionID::kShflDownI32, builder);
+        TargetFunctionID::kShflDownI32);
     target_function_call_info.operands = {
         all_warps_mask, builder->CreateExtractElement(x, i), offset,
         builder->getInt32(kWarpSize - 1)};
     target_function_call_info.input_types = {S32, S32, S32, S32};
     // Result type of the device function.
     target_function_call_info.output_type = S32;
-    target_function_call_info.attributes = {};
-    target_function_call_info.overloaded_types = {};
     x = builder->CreateInsertElement(
-        x, EmitCallToTargetFunction(target_function_call_info), i);
+        x, EmitCallToTargetFunction(target_function_call_info, builder), i);
   }
   return builder->CreateBitCast(
       builder->CreateTrunc(

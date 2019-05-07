@@ -44,8 +44,8 @@ enum class TargetFunctionID {
 };
 
 struct TargetFunctionCallInfo {
-  TargetFunctionCallInfo(TargetFunctionID f_id, llvm::IRBuilder<>* builder)
-      : function_id(f_id), b(builder) {}
+  TargetFunctionCallInfo(TargetFunctionID f_id)
+      : function_id(f_id), attributes({}), overloaded_types({}) {}
   TargetFunctionID function_id;
   // Input operands
   absl::Span<llvm::Value* const> operands;
@@ -55,7 +55,6 @@ struct TargetFunctionCallInfo {
   PrimitiveType output_type;
   absl::Span<const llvm::Attribute::AttrKind> attributes;
   absl::Span<llvm::Type* const> overloaded_types;
-  llvm::IRBuilder<>* b;
 };
 
 // Emits a call to the specified target intrinsic with the given operands.
@@ -67,17 +66,11 @@ llvm::Value* EmitCallToTargetFunction(
     TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
     absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b);
 
-// Emits a call to the specified target device function with the given operands.
-llvm::Value* EmitCallToTargetFunction(
-    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
-    absl::Span<const PrimitiveType> input_types, PrimitiveType output_type,
-    absl::Span<const llvm::Attribute::AttrKind> attributes,
-    llvm::IRBuilder<>* b);
-
 // Emits a call to either a  target device function or a target intrinsic with
 // the given operands.
 llvm::Value* EmitCallToTargetFunction(
-    struct TargetFunctionCallInfo function_info);
+    struct TargetFunctionCallInfo function_info, 
+    llvm::IRBuilder<>* b);
 }  // namespace gpu
 }  // namespace xla
 

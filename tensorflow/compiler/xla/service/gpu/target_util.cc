@@ -219,24 +219,16 @@ llvm::Value* EmitCallToTargetFunction(
                                          overloaded_types, b));
 }
 
-llvm::Value* EmitCallToTargetFunction(
-    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
-    absl::Span<const PrimitiveType> input_types, PrimitiveType output_type,
-    absl::Span<const llvm::Attribute::AttrKind> attributes,
-    llvm::IRBuilder<>* b) {
-  VLOG(2) << "Inside EmitCallToTargetFunctiob - function";
-  return (EmitCallToTargetFunctionHelper(function_id, operands, input_types,
-                                         output_type, attributes, {}, b));
-}
 
 llvm::Value* EmitCallToTargetFunction(
-    struct TargetFunctionCallInfo function_info) {
+    struct TargetFunctionCallInfo function_info,
+    llvm::IRBuilder<>* b) {
   VLOG(2) << "Inside EmitCallToTargetFunctiob - combined";
   return (EmitCallToTargetFunctionHelper(
       function_info.function_id, function_info.operands,
       function_info.input_types, function_info.output_type,
       function_info.attributes, function_info.overloaded_types,
-      function_info.b));
+      b));
 }
 
 }  // namespace gpu
