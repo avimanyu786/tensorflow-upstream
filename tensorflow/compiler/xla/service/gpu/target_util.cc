@@ -165,7 +165,7 @@ llvm::Value* EmitCallToTargetFunctionHelper(
     }
     if (target_triple.getArch() == llvm::Triple::amdgcn &&
         (function_id == TargetFunctionID::kShflDownF32 ||
-         function_id == TargetFunctionID::kShflDownF32)) {
+         function_id == TargetFunctionID::kShflDownI32)) {
       return EmitAMDGPUShfl(*callee_name, operands, output_type, attributes, b);
     }
     llvm::FunctionType* callee_type = llvm::FunctionType::get(
