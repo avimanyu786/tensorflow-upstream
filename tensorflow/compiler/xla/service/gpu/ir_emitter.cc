@@ -328,6 +328,7 @@ bool IrEmitter::MaybeEmitDirectAtomicOperation(
 Status IrEmitter::EmitAtomicOperationUsingCAS(const HloComputation& computation,
                                               llvm::Value* output_address,
                                               llvm::Value* source_address) {
+
   llvm::PointerType* output_address_type =
       llvm::dyn_cast<llvm::PointerType>(output_address->getType());
   CHECK_NE(output_address_type, nullptr);
@@ -341,20 +342,21 @@ Status IrEmitter::EmitAtomicOperationUsingCAS(const HloComputation& computation,
   llvm::Type* atomic_type = b_.getIntNTy(atomic_size);
   llvm::Type* atomic_address_type =
       atomic_type->getPointerTo(output_address_type->getPointerAddressSpace());
-
   auto old_insert_ip = b_.GetInsertPoint();
   auto old_insert_bb = b_.GetInsertBlock();
-  llvm::BasicBlock& entry_bb = b_.GetInsertBlock()->getParent()->getEntryBlock();
-  auto entry_ip = entry_bb.begin();
-  b_.SetInsertPoint(&entry_bb, entry_ip);
 
   // cas_old_output_address and cas_new_output_address point to the scratch
   // memory where we store the old and new values for the repeated atomicCAS
   // operations.
-  llvm::Value* cas_old_output_address =
-      Alloca(atomic_type, /*ArraySize=*/nullptr, "cas_old_output_address");
-  llvm::Value* cas_new_output_address =
-      Alloca(atomic_type, /*ArraySize=*/nullptr, "cas_new_output_address");
+  llvm::Value* cas_old_output_address = llvm_ir::EmitAllocaAtFunctionEntry(
+      atomic_type,       // The pointee type of the alloca instruction.
+      "cas_old_output_address-1",  // The name of the alloca instruction.
+      &b_);
+
+  llvm::Value* cas_new_output_address = llvm_ir::EmitAllocaAtFunctionEntry(
+      atomic_type,       // The pointee type of the alloca instruction.
+      "cas_new_output_address-1",  // The name of the alloca instruction.
+      &b_);
 
   b_.SetInsertPoint(old_insert_bb, old_insert_ip);
 
@@ -371,12 +373,17 @@ Status IrEmitter::EmitAtomicOperationUsingCAS(const HloComputation& computation,
     llvm::Type* address_int_type =
         module_->getDataLayout().getIntPtrType(output_address_type);
     atomic_memory_address = PtrToInt(output_address, address_int_type);
-    llvm::Value* mask = llvm::ConstantInt::get(address_int_type, -4);
+    llvm::Value* mask = llvm::ConstantInt::get(address_int_type, 3);
+    llvm::Value* offset = And(atomic_memory_address, mask);
+
+    mask = llvm::ConstantInt::get(address_int_type, -4);
     atomic_memory_address = And(atomic_memory_address, mask);
+    atomic_memory_address = Add(atomic_memory_address, offset);
     atomic_memory_address =
         IntToPtr(atomic_memory_address, atomic_address_type);
     binop_output_address = PointerBitCastOrAddrSpaceCast(cas_new_output_address,
                                                          element_address_type);
+
   } else {
     atomic_memory_address =
         PointerBitCastOrAddrSpaceCast(output_address, atomic_address_type);
