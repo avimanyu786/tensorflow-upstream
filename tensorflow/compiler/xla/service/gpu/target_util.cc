@@ -83,7 +83,80 @@ struct TargetFunctionInfo GetTargetFunctionInfo(TargetFunctionID function_id) {
 }
 }  // namespace
 
-// Helper function to emit call to AMDGPU shfl function
+// Helper function to emit call to AMDGPU shfl function.
+llvm::Value* EmitShflDownDeviceFunction(TargetFunctionID function_id,
+                                        absl::Span<llvm::Value* const> operands,
+                                        llvm::IRBuilder<>* b) {
+  CHECK(function_id == TargetFunctionID::kShflDownI32 ||
+        function_id == TargetFunctionID::kShflDownF32);
+  llvm::Module* module = b->GetInsertBlock()->getModule();
+  llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
+  CHECK(target_triple.getArch() == llvm::Triple::amdgcn);
+  std::vector<llvm::Value*> converted_operands;
+  // AMD GPU device function only accepts integer arguments. For F32 arguments,
+  // conversions need to be generated.
+
+ TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
+  auto callee_name = absl::get_if<const string>(&gpu_info.amdgpu_function);
+  CHECK(callee_name != nullptr);
+  if (function_id == TargetFunctionID::kShflDownI32) {
+    converted_operands.push_back(b->CreateBitCast(
+        operands[0], llvm_ir::PrimitiveTypeToIrType(S32, module)));
+  } else if (function_id == TargetFunctionID::kShflDownF32) {
+    converted_operands.push_back(operands[0]);
+  } else {
+    LOG(FATAL) << "Unimplemented type for AMDGPU shfl function.";
+  }
+  converted_operands.push_back(operands[1]);
+  // The input type is {i32, i32}.
+  std::vector<llvm::Type*> ir_input_types(
+      2, llvm_ir::PrimitiveTypeToIrType(S32, module));
+  // The output type is i32.
+  llvm::Type* ir_output_type = llvm_ir::PrimitiveTypeToIrType(S32, module);
+  llvm::FunctionType* callee_type =
+      llvm::FunctionType::get(/*Result=*/ir_output_type,
+                              ir_input_types,
+                              /*isVarArg=*/false);
+
+ string munged_callee = *callee_name;
+  StrAppend(&munged_callee, "_i32");
+  llvm::FunctionCallee shfl_call = module->getOrInsertFunction(
+      llvm_ir::AsStringRef(munged_callee), callee_type);
+  llvm::Function* callee =
+      llvm::dyn_cast<llvm::Function>(shfl_call.getCallee());
+  llvm::Value* result =
+      b->CreateCall(shfl_call, llvm_ir::AsArrayRef(converted_operands));
+  if (function_id == TargetFunctionID::kShflDownF32) {
+    return (
+        b->CreateBitCast(result, llvm::Type::getFloatTy(module->getContext())));
+  } else {
+    return (result);
+  }
+}
+
+
+
+
+llvm::Value* EmitShflDownIntrinsicFunction(
+    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
+    absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b) {
+  CHECK(function_id == TargetFunctionID::kShflDownI32 ||
+        function_id == TargetFunctionID::kShflDownF32);
+
+  llvm::Module* module = b->GetInsertBlock()->getModule();
+  llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
+  CHECK(target_triple.getArch() == llvm::Triple::nvptx ||
+        target_triple.getArch() == llvm::Triple::nvptx64);
+  TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
+  auto llvm_intrinsic_id =
+      absl::get_if<llvm::Intrinsic::ID>(&gpu_info.nvptx_function);
+  CHECK(llvm_intrinsic_id != nullptr);
+  llvm::Function* intrinsic = llvm::Intrinsic::getDeclaration(
+      module, *llvm_intrinsic_id, llvm_ir::AsArrayRef(overloaded_types));
+  return b->CreateCall(intrinsic, llvm_ir::AsArrayRef(operands));
+}
+
+
 llvm::Value* EmitAMDGPUShfl(
     const string& callee_name, absl::Span<llvm::Value* const> operands,
     PrimitiveType output_type,

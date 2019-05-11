@@ -71,6 +71,19 @@ llvm::Value* EmitCallToTargetFunction(
 llvm::Value* EmitCallToTargetFunction(
     struct TargetFunctionCallInfo function_info, 
     llvm::IRBuilder<>* b);
+
+
+// Emits a call for AMD GPU device function for shfl_down.
+llvm::Value* EmitShflDownIntrinsicFunction(
+    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
+    absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b);
+
+// Emits a call for PTX intrinsic for shfl_down.
+llvm::Value* EmitShflDownDeviceFunction(TargetFunctionID function_id,
+                                        absl::Span<llvm::Value* const> operands,
+                                        llvm::IRBuilder<>* b);
+
+
 }  // namespace gpu
 }  // namespace xla
 

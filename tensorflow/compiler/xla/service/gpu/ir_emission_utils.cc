@@ -316,21 +316,25 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
                                      llvm::IRBuilder<>* builder) {
   int bit_width = value->getType()->getPrimitiveSizeInBits();
   llvm::Value* all_warps_mask = builder->getInt32(-1);
+  llvm::Module* module = builder->GetInsertBlock()->getModule();
+  llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
 
   // Special case for efficiency
   if (value->getType()->isFloatTy() && bit_width == 32) {
-    struct TargetFunctionCallInfo target_function_call_info(
-        TargetFunctionID::kShflDownF32);
-    target_function_call_info.operands = {all_warps_mask, value, offset,
-                                          builder->getInt32(kWarpSize - 1)};
-    target_function_call_info.input_types = {S32, F32, S32, S32};
-    // Result type of the device function.
-    target_function_call_info.output_type = F32;
-    return EmitCallToTargetFunction(target_function_call_info, builder);
+    if (target_triple.getArch() == llvm::Triple::nvptx ||
+        target_triple.getArch() == llvm::Triple::nvptx64) {
+      return EmitShflDownIntrinsicFunction(
+          TargetFunctionID::kShflDownF32,
+          {all_warps_mask, value, offset, builder->getInt32(kWarpSize - 1)}, {},
+          builder);
+    } else if (target_triple.getArch() == llvm::Triple::amdgcn) {
+      return EmitShflDownDeviceFunction(TargetFunctionID::kShflDownF32,
+                                        {value, offset}, builder);
+    } else {
+      LOG(FATAL) << "Invalid triple " << target_triple.str();
+    }
   }
-
-  // We must split values wider than 32 bits as the "shfl" instruction operates
-  // on 32-bit values.
+ 
   int num_segments = CeilOfRatio(bit_width, 32);
   llvm::Value* x = builder->CreateBitCast(
       builder->CreateZExt(
@@ -338,16 +342,23 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
           builder->getIntNTy(32 * num_segments)),
       llvm::VectorType::get(builder->getInt32Ty(), num_segments));
   for (int i = 0; i < num_segments; ++i) {
-    struct TargetFunctionCallInfo target_function_call_info(
-        TargetFunctionID::kShflDownI32);
-    target_function_call_info.operands = {
-        all_warps_mask, builder->CreateExtractElement(x, i), offset,
-        builder->getInt32(kWarpSize - 1)};
-    target_function_call_info.input_types = {S32, S32, S32, S32};
-    // Result type of the device function.
-    target_function_call_info.output_type = S32;
-    x = builder->CreateInsertElement(
-        x, EmitCallToTargetFunction(target_function_call_info, builder), i);
+    llvm::Value* insert_val;
+    if (target_triple.getArch() == llvm::Triple::nvptx ||
+        target_triple.getArch() == llvm::Triple::nvptx64) {
+      insert_val = EmitShflDownIntrinsicFunction(
+          TargetFunctionID::kShflDownI32,
+          {all_warps_mask, builder->CreateExtractElement(x, i), offset,
+           builder->getInt32(kWarpSize - 1)},
+          {}, builder);
+    } else if (target_triple.getArch() == llvm::Triple::amdgcn) {
+      insert_val = EmitShflDownDeviceFunction(
+          TargetFunctionID::kShflDownI32,
+          {builder->CreateExtractElement(x, i), offset}, builder);
+    } else {
+      LOG(FATAL) << "Invalid triple " << target_triple.str();
+    }
+
+  x = builder->CreateInsertElement(x, insert_val, i);
   }
   return builder->CreateBitCast(
       builder->CreateTrunc(
@@ -355,6 +366,10 @@ llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
           builder->getIntNTy(bit_width)),
       value->getType());
 }
+
+
+
+
 
 StatusOr<CudnnConvKind> GetCudnnConvKind(
     const HloCustomCallInstruction* instr) {
