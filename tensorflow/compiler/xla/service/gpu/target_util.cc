@@ -99,10 +99,10 @@ llvm::Value* EmitShflDownDeviceFunction(TargetFunctionID function_id,
  TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
   auto callee_name = absl::get_if<const string>(&gpu_info.amdgpu_function);
   CHECK(callee_name != nullptr);
-  if (function_id == TargetFunctionID::kShflDownI32) {
+  if (function_id == TargetFunctionID::kShflDownF32) {
     converted_operands.push_back(b->CreateBitCast(
         operands[0], llvm_ir::PrimitiveTypeToIrType(S32, module)));
-  } else if (function_id == TargetFunctionID::kShflDownF32) {
+  } else if (function_id == TargetFunctionID::kShflDownI32) {
     converted_operands.push_back(operands[0]);
   } else {
     LOG(FATAL) << "Unimplemented type for AMDGPU shfl function.";
