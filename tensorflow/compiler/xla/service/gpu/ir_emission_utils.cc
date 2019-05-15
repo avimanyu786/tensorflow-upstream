@@ -316,8 +316,8 @@ llvm::Value* EmitPrintf(absl::string_view fmt,
 llvm::Value* EmitShflDownDeviceFunctionForAMDGPU(
     absl::Span<llvm::Value* const> operands, llvm::IRBuilder<>* b) {
   llvm::Module* module = b->GetInsertBlock()->getModule();
-  llvm::Value* value = operands[0];
-  llvm::Value* offset = b->CreateBitCast(operands[1], b->getInt32Ty());
+  llvm::Value* value = b->CreateBitCast(operands[0], b->getInt32Ty());
+  llvm::Value* offset = operands[1];
 
   // The input type is {i32, i32}.
   std::vector<llvm::Type*> ir_input_types(2, b->getInt32Ty());
