@@ -326,7 +326,7 @@ llvm::Value* EmitShflDownDeviceFunctionForAMDGPU(
   llvm::FunctionType* callee_type =
       llvm::FunctionType::get(/*Result=*/ir_output_type, ir_input_types,
                               /*isVarArg=*/false);
-  string callee_name = "ockl_readuplane_i32";
+  string callee_name = "__ockl_readuplane_i32";
   llvm::FunctionCallee shfl_call = module->getOrInsertFunction(
       llvm_ir::AsStringRef(callee_name), callee_type);
   llvm::Value* result = b->CreateCall(shfl_call, {value, offset});
