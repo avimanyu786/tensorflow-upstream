@@ -330,7 +330,8 @@ llvm::Value* EmitShflDownDeviceFunctionForAMDGPU(
   llvm::FunctionCallee shfl_call = module->getOrInsertFunction(
       llvm_ir::AsStringRef(callee_name), callee_type);
   llvm::Value* result = b->CreateCall(shfl_call, {value, offset});
-  return b->CreateBitCast(result, llvm::Type::getFloatTy(module->getContext()));
+  int bit_width = value->getType()->getPrimitiveSizeInBits();
+  return result;
 }
 
 // Helper function to emit call to NVPTX shfl intrinsic.
