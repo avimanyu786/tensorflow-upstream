@@ -12,45 +12,68 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-// Provide helper routine for obtaining  gpu target information useful
-// for llvm IR contruction.
 
 #include "tensorflow/compiler/xla/service/gpu/target_util.h"
 
+#include "absl/meta/type_traits.h"
 #include "absl/types/variant.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/Operator.h"
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_util.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/core/platform/logging.h"
 
+#include <type_traits>
+
 namespace xla {
 namespace gpu {
-namespace {
-// Utility functions to obtain NVPTX/AMDGPU specific information.
 
-using absl::StrAppend;
+namespace {
+
 using IntrinsicOrDeviceFunction =
     absl::variant<llvm::Intrinsic::ID, const string>;
-
+using IntrinsicOrString = absl::variant<int, const string>;
 // Wrapper structure for carrying information about the intrinsic ids or the
-// device function for NVPTX/AMDGPU platforms.
+// device function names for NVPTX/AMDGPU platforms.
 struct TargetFunctionInfo {
   IntrinsicOrDeviceFunction nvptx_function;
   IntrinsicOrDeviceFunction amdgpu_function;
 };
 
+struct TargetFunctionInfoVisitor {
+  absl::Span<llvm::Value* const> operands;
+  llvm::IRBuilder<>* builder;
+  absl::Span<llvm::Type* const> overloaded_types;
+  llvm::Module* module;
+  llvm::Triple target_triple;
+  TargetFunctionInfoVisitor(absl::Span<llvm::Value* const> operands,
+                            absl::Span<llvm::Type* const> overloaded_types,
+                            llvm::IRBuilder<>* b)
+      : operands(operands), overloaded_types(overloaded_types), builder(b) {
+    module = builder->GetInsertBlock()->getModule();
+    llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
+  }
+
+  TargetFunctionInfoVisitor() {}
+  llvm::Value* operator()(const std::string& s) const {
+    LOG(FATAL) << "Unexpected function provided for " << target_triple.str();
+    return nullptr;
+  }
+  llvm::Value* operator()(const llvm::Intrinsic::ID llvm_intrinsic_id) const {
+    llvm::Function* intrinsic = llvm::Intrinsic::getDeclaration(
+        module, llvm_intrinsic_id, llvm_ir::AsArrayRef(overloaded_types));
+    return builder->CreateCall(intrinsic, llvm_ir::AsArrayRef(operands));
+  }
+};
+
 // Gets the llvm intrinsic id or name of the device function on different
 // platforms (NVPTX, AMDGPU) that corresponds to the TargetFunctionID that is
 // provided.
-struct TargetFunctionInfo GetTargetFunctionInfo(TargetFunctionID function_id) {
+TargetFunctionInfo GetTargetFunctionInfo(TargetFunctionID function_id) {
   switch (function_id) {
-    case TargetFunctionID::kShflDownF32: {
-      return {llvm::Intrinsic::nvvm_shfl_sync_down_f32, "__ockl_readuplane"};
-    }
-    case TargetFunctionID::kShflDownI32: {
-      return {llvm::Intrinsic::nvvm_shfl_sync_down_i32, "__ockl_readuplane"};
-    }
     case TargetFunctionID::kThreadIdx: {
       return {llvm::Intrinsic::nvvm_read_ptx_sreg_tid_x,
               llvm::Intrinsic::amdgcn_workitem_id_x};
@@ -83,131 +106,7 @@ struct TargetFunctionInfo GetTargetFunctionInfo(TargetFunctionID function_id) {
 }
 }  // namespace
 
-// Helper function to emit call to AMDGPU shfl function.
-llvm::Value* EmitShflDownDeviceFunction(TargetFunctionID function_id,
-                                        absl::Span<llvm::Value* const> operands,
-                                        llvm::IRBuilder<>* b) {
-  CHECK(function_id == TargetFunctionID::kShflDownI32 ||
-        function_id == TargetFunctionID::kShflDownF32);
-  llvm::Module* module = b->GetInsertBlock()->getModule();
-  llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
-  CHECK(target_triple.getArch() == llvm::Triple::amdgcn);
-  std::vector<llvm::Value*> converted_operands;
-  // AMD GPU device function only accepts integer arguments. For F32 arguments,
-  // conversions need to be generated.
-
- TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
-  auto callee_name = absl::get_if<const string>(&gpu_info.amdgpu_function);
-  CHECK(callee_name != nullptr);
-  if (function_id == TargetFunctionID::kShflDownF32) {
-    converted_operands.push_back(b->CreateBitCast(
-        operands[0], llvm_ir::PrimitiveTypeToIrType(S32, module)));
-  } else if (function_id == TargetFunctionID::kShflDownI32) {
-    converted_operands.push_back(operands[0]);
-  } else {
-    LOG(FATAL) << "Unimplemented type for AMDGPU shfl function.";
-  }
-  converted_operands.push_back(operands[1]);
-  // The input type is {i32, i32}.
-  std::vector<llvm::Type*> ir_input_types(
-      2, llvm_ir::PrimitiveTypeToIrType(S32, module));
-  // The output type is i32.
-  llvm::Type* ir_output_type = llvm_ir::PrimitiveTypeToIrType(S32, module);
-  llvm::FunctionType* callee_type =
-      llvm::FunctionType::get(/*Result=*/ir_output_type,
-                              ir_input_types,
-                              /*isVarArg=*/false);
-
- string munged_callee = *callee_name;
-  StrAppend(&munged_callee, "_i32");
-  llvm::FunctionCallee shfl_call = module->getOrInsertFunction(
-      llvm_ir::AsStringRef(munged_callee), callee_type);
-  llvm::Function* callee =
-      llvm::dyn_cast<llvm::Function>(shfl_call.getCallee());
-  llvm::Value* result =
-      b->CreateCall(shfl_call, llvm_ir::AsArrayRef(converted_operands));
-  if (function_id == TargetFunctionID::kShflDownF32) {
-    return (
-        b->CreateBitCast(result, llvm::Type::getFloatTy(module->getContext())));
-  } else {
-    return (result);
-  }
-}
-
-
-
-
-llvm::Value* EmitShflDownIntrinsicFunction(
-    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
-    absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b) {
-  CHECK(function_id == TargetFunctionID::kShflDownI32 ||
-        function_id == TargetFunctionID::kShflDownF32);
-
-  llvm::Module* module = b->GetInsertBlock()->getModule();
-  llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
-  CHECK(target_triple.getArch() == llvm::Triple::nvptx ||
-        target_triple.getArch() == llvm::Triple::nvptx64);
-  TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
-  auto llvm_intrinsic_id =
-      absl::get_if<llvm::Intrinsic::ID>(&gpu_info.nvptx_function);
-  CHECK(llvm_intrinsic_id != nullptr);
-  llvm::Function* intrinsic = llvm::Intrinsic::getDeclaration(
-      module, *llvm_intrinsic_id, llvm_ir::AsArrayRef(overloaded_types));
-  return b->CreateCall(intrinsic, llvm_ir::AsArrayRef(operands));
-}
-
-
-llvm::Value* EmitAMDGPUShfl(
-    const string& callee_name, absl::Span<llvm::Value* const> operands,
-    PrimitiveType output_type,
-    absl::Span<const llvm::Attribute::AttrKind> attributes,
-    llvm::IRBuilder<>* b) {
-  llvm::Module* module = b->GetInsertBlock()->getModule();
-  std::vector<llvm::Value*> converted_operands;
-  // AMD device function only makes use of 2nd and 3rd operands. Also, the
-  // device function only accepts integer arguments. For F32 arguments,
-  // conversions need to be generated.
-  if (output_type == F32) {
-    converted_operands.push_back(b->CreateBitCast(
-        operands[1], llvm_ir::PrimitiveTypeToIrType(S32, module)));
-  } else if (output_type == S32) {
-    converted_operands.push_back(operands[1]);
-  } else {
-    LOG(FATAL) << "Unimplemented type for AMDGPU shfl function.";
-  }
-  converted_operands.push_back(operands[2]);
-  std::vector<llvm::Type*> ir_input_types(
-      2, llvm_ir::PrimitiveTypeToIrType(S32, module));
-  llvm::Type* ir_output_type =
-      llvm_ir::PrimitiveTypeToIrType(output_type, module);
-  llvm::FunctionType* callee_type =
-      llvm::FunctionType::get(ir_output_type,  // Return type.
-                              ir_input_types,  // Parameter types.
-                              false);
-
-  string munged_callee = callee_name;
-  StrAppend(&munged_callee, "_i32");
-  llvm::FunctionCallee shfl_call = module->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee), callee_type);
-#if 0 
-  llvm::Function* callee = llvm::dyn_cast<llvm::Function>(
-          module->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee),
-                                callee_type)
-          .getCallee());
-#endif 
-  llvm::Function* callee = llvm::dyn_cast<llvm::Function>(shfl_call.getCallee());
-  for (auto attribute : attributes) {
-    callee->addFnAttr(attribute);
-  }
-  llvm::Value* result =
-      b->CreateCall(shfl_call, llvm_ir::AsArrayRef(converted_operands));
-  if (output_type == F32) {
-    return (
-        b->CreateBitCast(result, llvm::Type::getFloatTy(module->getContext())));
-  } else {
-    return (result);
-  }
-}
-
+// Helper function to emit call to intrinsic or device function.
 llvm::Value* EmitCallToTargetFunctionHelper(
     TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
     absl::Span<const PrimitiveType> input_types, PrimitiveType output_type,
@@ -215,7 +114,7 @@ llvm::Value* EmitCallToTargetFunctionHelper(
     absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b) {
   llvm::Module* module = b->GetInsertBlock()->getModule();
   llvm::Triple target_triple = llvm::Triple(module->getTargetTriple());
-  struct TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
+  TargetFunctionInfo gpu_info = GetTargetFunctionInfo(function_id);
   IntrinsicOrDeviceFunction* gpu_function;
   if ((target_triple.getArch() == llvm::Triple::nvptx) ||
       (target_triple.getArch() == llvm::Triple::nvptx64)) {
@@ -225,84 +124,16 @@ llvm::Value* EmitCallToTargetFunctionHelper(
   } else {
     LOG(FATAL) << "Invalid triple " << target_triple.str();
   }
-  if (auto llvm_intrinsic_id =
-          absl::get_if<llvm::Intrinsic::ID>(gpu_function)) {
-    llvm::Function* intrinsic = llvm::Intrinsic::getDeclaration(
-        module, *llvm_intrinsic_id, llvm_ir::AsArrayRef(overloaded_types));
-    return b->CreateCall(intrinsic, llvm_ir::AsArrayRef(operands));
-  } else if (auto callee_name = absl::get_if<const string>(gpu_function)) {
-    std::vector<llvm::Type*> ir_input_types;
-    for (PrimitiveType input_type : input_types) {
-      ir_input_types.push_back(
-          llvm_ir::PrimitiveTypeToIrType(input_type, module));
-    }
-    if (target_triple.getArch() == llvm::Triple::amdgcn &&
-        (function_id == TargetFunctionID::kShflDownF32 ||
-         function_id == TargetFunctionID::kShflDownI32)) {
-      return EmitAMDGPUShfl(*callee_name, operands, output_type, attributes, b);
-    }
-    llvm::FunctionType* callee_type = llvm::FunctionType::get(
-        llvm_ir::PrimitiveTypeToIrType(output_type,
-                                       module),  // Return type.
-        ir_input_types,                          // Parameter types.
-        false);                                  // No variadic arguments.
-
-    string munged_callee = *callee_name;
-    switch (output_type) {
-      case S32:
-        StrAppend(&munged_callee, "_i32");
-        break;
-      case S64:
-        StrAppend(&munged_callee, "_i64");
-        break;
-      case F32:
-        StrAppend(&munged_callee, "_f32");
-        break;
-      case F64:
-        StrAppend(&munged_callee, "_f64");
-        break;
-      default:
-        LOG(FATAL) << "Bad Type " << PrimitiveType_Name(output_type) << "\n";
-    }
-    // Declares the callee if it is not declared already.
-    llvm::FunctionCallee shfl_call = module->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee), callee_type);
-    llvm::Value* result = b->CreateCall(shfl_call, llvm_ir::AsArrayRef(operands));
-#if 0 
-    llvm::Function* callee = llvm::dyn_cast<llvm::Function>(
-        b->GetInsertBlock()
-            ->getModule()
-            ->getOrInsertFunction(llvm_ir::AsStringRef(munged_callee),
-                                  callee_type)
-            .getCallee());
-    for (auto attribute : attributes) {
-      callee->addFnAttr(attribute);
-    }
-    llvm::Value* result = b->CreateCall(callee, llvm_ir::AsArrayRef(operands));
-#endif 
-    return result;
-  }
+  return (absl::visit(TargetFunctionInfoVisitor{operands, overloaded_types, b},
+                      *gpu_function));
 }
 
 llvm::Value* EmitCallToTargetFunction(
     TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
     absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b) {
-  VLOG(2) << "Inside EmitCallToTargetFunctiob -intrinsic";
   return (EmitCallToTargetFunctionHelper(function_id, operands, {},
                                          PRIMITIVE_TYPE_INVALID, {},
                                          overloaded_types, b));
 }
-
-
-llvm::Value* EmitCallToTargetFunction(
-    struct TargetFunctionCallInfo function_info,
-    llvm::IRBuilder<>* b) {
-  VLOG(2) << "Inside EmitCallToTargetFunctiob - combined";
-  return (EmitCallToTargetFunctionHelper(
-      function_info.function_id, function_info.operands,
-      function_info.input_types, function_info.output_type,
-      function_info.attributes, function_info.overloaded_types,
-      b));
-}
-
 }  // namespace gpu
 }  // namespace xla

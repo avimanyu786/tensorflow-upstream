@@ -13,6 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+// Provides helper routines for obtaining gpu - AMD GPU/Nvidia PTX - target
+// information necessary for llvm IR construction.
+
 #ifndef TENSORFLOW_COMPILER_XLA_SERVICE_GPU_TARGET_UTIL_H_
 #define TENSORFLOW_COMPILER_XLA_SERVICE_GPU_TARGET_UTIL_H_
 
@@ -30,31 +33,15 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
-// Enmeration to get target specific intrinsics.
+// Enumeration to get target specific intrinsics or device functions.
 enum class TargetFunctionID {
-  kShflDownF32 = 0,
-  kShflDownI32,
-  kThreadIdx,
+  kThreadIdx = 0,
   kThreadIdy,
   kThreadIdz,
   kBlockIdx,
   kBlockIdy,
   kBlockIdz,
   kBarrierId,
-};
-
-struct TargetFunctionCallInfo {
-  TargetFunctionCallInfo(TargetFunctionID f_id)
-      : function_id(f_id), attributes({}), overloaded_types({}) {}
-  TargetFunctionID function_id;
-  // Input operands
-  absl::Span<llvm::Value* const> operands;
-  // Input types accepted by the device function.
-  absl::Span<const PrimitiveType> input_types;
-  // Result type of the device function.
-  PrimitiveType output_type;
-  absl::Span<const llvm::Attribute::AttrKind> attributes;
-  absl::Span<llvm::Type* const> overloaded_types;
 };
 
 // Emits a call to the specified target intrinsic with the given operands.
@@ -65,25 +52,6 @@ struct TargetFunctionCallInfo {
 llvm::Value* EmitCallToTargetFunction(
     TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
     absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b);
-
-// Emits a call to either a  target device function or a target intrinsic with
-// the given operands.
-llvm::Value* EmitCallToTargetFunction(
-    struct TargetFunctionCallInfo function_info, 
-    llvm::IRBuilder<>* b);
-
-
-// Emits a call for AMD GPU device function for shfl_down.
-llvm::Value* EmitShflDownIntrinsicFunction(
-    TargetFunctionID function_id, absl::Span<llvm::Value* const> operands,
-    absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b);
-
-// Emits a call for PTX intrinsic for shfl_down.
-llvm::Value* EmitShflDownDeviceFunction(TargetFunctionID function_id,
-                                        absl::Span<llvm::Value* const> operands,
-                                        llvm::IRBuilder<>* b);
-
-
 }  // namespace gpu
 }  // namespace xla
 
