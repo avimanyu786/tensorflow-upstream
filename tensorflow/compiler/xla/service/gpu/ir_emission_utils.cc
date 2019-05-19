@@ -312,29 +312,22 @@ llvm::Value* EmitPrintf(absl::string_view fmt,
        arguments_ptr});
 }
 
-
 // Helper function to emit call to AMDGPU shfl_down function.
 llvm::Value* EmitAMDGPUShflDown(llvm::Value* value, llvm::Value* offset,
                                 llvm::IRBuilder<>* b) {
   llvm::Module* module = b->GetInsertBlock()->getModule();
-  // AMDGPU device function requires first argument - value - as i32.
-  llvm::Value* value_as_int = b->CreateBitCast(value, b->getInt32Ty());
   CHECK_EQ(value->getType()->getPrimitiveSizeInBits(), 32);
   auto* i32_ty = b->getInt32Ty();
   llvm::FunctionCallee shfl_fn = module->getOrInsertFunction(
       llvm_ir::AsStringRef("__ockl_readuplane_i32"),
       llvm::FunctionType::get(/*Result=*/i32_ty, {i32_ty, i32_ty},
                               /*isVarArg=*/false));
-
-  llvm::Value* result = b->CreateCall(shfl_fn, {value_as_int, offset});
-  if (value->getType()->isFloatTy()) {
-    return b->CreateBitCast(result,
-                            llvm::Type::getFloatTy(module->getContext()));
-  } else {
-    return result;
-  }
+  // AMDGPU device function requires first argument - value - as i32.
+  llvm::Value* result =
+      b->CreateCall(shfl_fn, {b->CreateBitCast(value, i32_ty), offset});
+  // AMDGPU device function always returns an i32 type.
+  return b->CreateBitCast(result, value->getType());
 }
-
 
 // Helper function to emit call to NVPTX shfl_down intrinsic.
 llvm::Value* EmitNVPTXShflDown(llvm::Value* all_warps_mask, llvm::Value* value,
@@ -351,29 +344,6 @@ llvm::Value* EmitNVPTXShflDown(llvm::Value* all_warps_mask, llvm::Value* value,
       llvm::Intrinsic::getDeclaration(module, llvm_intrinsic_id, {});
   return b->CreateCall(
       intrinsic, {all_warps_mask, value, offset, b->getInt32(kWarpSize - 1)});
-}
-
-// Helper function to emit call to AMDGPU shfl function.
-llvm::Value* EmitShflDownDeviceFunctionForAMDGPU(
-    absl::Span<llvm::Value* const> operands, llvm::IRBuilder<>* b) {
-  llvm::Module* module = b->GetInsertBlock()->getModule();
-  llvm::Value* value = b->CreateBitCast(operands[0], b->getInt32Ty());
-  llvm::Value* offset = operands[1];
-
-  // The input type is {i32, i32}.
-  std::vector<llvm::Type*> ir_input_types(2, b->getInt32Ty());
-  // The output type is i32.
-  llvm::Type* ir_output_type = b->getInt32Ty();
-  llvm::FunctionType* callee_type =
-      llvm::FunctionType::get(/*Result=*/ir_output_type, ir_input_types,
-                              /*isVarArg=*/false);
-  string callee_name = "__ockl_readuplane_i32";
-  llvm::FunctionCallee shfl_call = module->getOrInsertFunction(
-      llvm_ir::AsStringRef(callee_name), callee_type);
-  llvm::Value* result = b->CreateCall(shfl_call, {value, offset});
-  int bit_width = value->getType()->getPrimitiveSizeInBits();
-  VLOG(2) << "Result type " << llvm_ir::DumpToString(*result->getType()); 
-  return result;
 }
 
 llvm::Value* EmitFullWarpShuffleDown(llvm::Value* value, llvm::Value* offset,
